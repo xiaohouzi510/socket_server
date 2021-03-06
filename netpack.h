@@ -11,7 +11,7 @@ using namespace std;
 struct socket_data;
 struct cepoll_data;
 
-typedef void (*revc_cb)(cepoll_data *data,socket_data* sock_data);
+typedef void (*revc_cb)(cepoll_data *data,socket_data* sock_data,char *buff,int n);
 typedef void (*accept_cb)(cepoll_data *data,socket_data* sock_data);
 typedef void (*connect_cb)(cepoll_data *data,socket_data* sock_data);
 
@@ -27,7 +27,7 @@ enum esock_type
 	esock_connected = 3,
 };
 
-//锁
+//自旋锁
 struct spinlock 
 {
 	spinlock() : lock(0){}
@@ -37,9 +37,10 @@ struct spinlock
 //一个包数据
 struct netpack
 {
-	netpack() : m_len(0),m_buffer(NULL){}
+	netpack() : m_len(0),m_buffer(NULL),m_id(0){}
 	unsigned short m_len;
 	char *m_buffer;
+	uint32_t m_id;
 };
 
 //未完成的一个包
@@ -65,7 +66,7 @@ struct pack_queue
 	netpack *m_queue;
 };
 
-//写缓存
+//写缓冲
 struct write_buffer 
 {
 	write_buffer():m_next(NULL),m_buffer(NULL),m_ptr(NULL),m_len(0){}
@@ -81,7 +82,7 @@ struct wb_list
 	wb_list() : m_head(NULL),m_tail(NULL){}
 	write_buffer *m_head;
 	write_buffer *m_tail;
-	spinlock      m_lock;
+	spinlock m_lock;
 };
 
 //一个 socket 数据
@@ -101,6 +102,7 @@ struct socket_data
 	uint32_t m_id;
 	int m_fd;
 	wb_list m_write_list;
+	pack_queue m_read_queue;
 	int m_recv_size;
 	char m_ip[64];
 	int m_port;

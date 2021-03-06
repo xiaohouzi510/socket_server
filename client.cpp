@@ -16,9 +16,10 @@
 
 using namespace std;
 
+//连接 socket 管理器
 socket_data *g_connect = NULL;
-cepoll_data *g_epoll = NULL;
-map<uint32_t,pack_queue*> g_read_queue;
+//epoll 管理器
+cepoll_data *g_epoll;
 
 void *readline_stdin(void *arg) 
 {
@@ -47,20 +48,19 @@ void *readline_stdin(void *arg)
 			close(g_connect->m_fd);
 			continue;
 		}
-		send_data(g_epoll,g_connect,result,n+2);
+		send_data(g_epoll,g_connect->m_id,result,n+2);
 	}
 	return NULL;
 }
 
-void recv_data_cb(cepoll_data *data,socket_data* sock_data)
+//收到数据回调
+void recv_data_cb(cepoll_data *data,socket_data* sock_data,char *buff,int n)
 {
-	netpack *t_pack = NULL;
-	while((t_pack=pop_queue(&sock_data->m_read_queue)))
+	netpack *pack = NULL;
+	filter_data(&sock_data->m_read_queue,buff,n);
+	while((pack=pop_queue(&sock_data->m_read_queue)))
 	{
-		LOG_DBG("recv ip=%s port=%d data=[%s]",sock_data->m_ip,sock_data->m_port,t_pack->m_buffer);
-		char *send_buffer = pack_data(t_pack->m_buffer,t_pack->m_len);
-		delete [] t_pack->m_buffer;
-		t_pack->m_buffer = NULL;
+		LOG_DBG("recv server id=%d data=[%s]",sock_data->m_id,pack->m_buffer);
 	}
 }
 

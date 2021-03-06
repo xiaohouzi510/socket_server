@@ -17,7 +17,7 @@ static void expand_queue(pack_queue *q)
 }
 
 //队列中加入一个包
-static void push_data(pack_queue *q,char *buffer,unsigned int len,bool clone)
+netpack* push_data(pack_queue *q,char *buffer,unsigned int len,bool clone)
 {
 	netpack *pack = &q->m_queue[q->m_tail++];
 	if(q->m_tail == q->m_cap)
@@ -39,6 +39,7 @@ static void push_data(pack_queue *q,char *buffer,unsigned int len,bool clone)
 	{
 		expand_queue(q);
 	}
+	return pack;
 }
 
 //读取头部大小
@@ -108,8 +109,8 @@ void filter_data(pack_queue *q,char *buffer,unsigned int len)
 		q->m_un.m_read = 0;	
 		q->m_un.m_pack.m_buffer = new char[q->m_un.m_pack.m_len+1];
 		q->m_un.m_pack.m_buffer[q->m_un.m_pack.m_len] = 0;
-		buffer += 1;
 		len -= 1;
+		buffer += 1;
 	}
 	unsigned int need = q->m_un.m_pack.m_len - q->m_un.m_read;
 	if(need > len)

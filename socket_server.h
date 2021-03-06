@@ -21,7 +21,13 @@ inline const char * TimeFormat()
     return szBuf;
 }
 
-#define LOG_DBG(format,...) printf("[%s][%s:%d] ", TimeFormat(), __FILE__, __LINE__); printf(format, ##__VA_ARGS__); printf("\n"); fflush(stdout)
+#define LOG_DBG(format,...) printf("[%s][%s:%d] ", TimeFormat(), __FILE__, __LINE__); printf(format, ##__VA_ARGS__);printf("\n");fflush(stdout)
+
+//上锁
+void spinlock_lock(spinlock *lock); 
+
+//解锁
+void spinlock_unlock(spinlock *lock); 
 
 //打包
 char* pack_data(const char *buffer,unsigned short len);
@@ -31,6 +37,7 @@ void release_epoll(cepoll_data *data);
 
 //创建 epoll
 cepoll_data* create_epoll();
+
 //监听端口
 socket_data* listen_sock(cepoll_data *data,const char *ip,int port,int opaque);
 
@@ -38,7 +45,7 @@ socket_data* listen_sock(cepoll_data *data,const char *ip,int port,int opaque);
 socket_data* connect_sock(cepoll_data *data,const char *ip,int port);
 
 //发送数据
-void send_data(cepoll_data *data,socket_data* sock_data,char *buffer,int len);
+void send_data(cepoll_data *data,uint32_t id,char *buffer,int len);
 
 //循环
 void server_loop(cepoll_data *data,epoll_event *evs,int max_count);
