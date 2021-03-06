@@ -1,5 +1,5 @@
-# epoll  
-* lt 模式 epoll  
+* Reactor 模型
+* LT 模式 epoll  
 * make 编译  
 * ./server,监听 8888 端口  
 * ./client 127.0.0.1 8888,连接服务器  
