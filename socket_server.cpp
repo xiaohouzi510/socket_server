@@ -16,12 +16,12 @@
 
 #define MAX_BUFF_LEN 65535*4
 
-static void spinlock_lock(spinlock *lock) 
+void spinlock_lock(spinlock *lock) 
 {
 	while (__sync_lock_test_and_set(&lock->lock,1)){}
 }
 
-static void spinlock_unlock(spinlock *lock) 
+void spinlock_unlock(spinlock *lock) 
 {
 	__sync_lock_release(&lock->lock);
 }
@@ -217,7 +217,7 @@ static void write_tcp_list(cepoll_data *data,socket_data *sock_data)
 				}
 				char sz_error[64];
 				sprintf(sz_error,"write_tcp_list [%s] errno=%d",strerror(errno),errno);
-				close_sock(data,sock_data->m_fd,sz_error);
+				close_sock(data,sock_data->m_id,sz_error);
 			}
 			if(temp->m_len != sz)
 			{
@@ -255,7 +255,7 @@ static void read_tcp_data(cepoll_data *data,socket_data *sock_data)
 		default:
 			char sz_error[64];
 			sprintf(sz_error,"read data err [%s] errno=%d",strerror(errno),errno);
-			close_sock(data,sock_data->m_fd,sz_error);
+			close_sock(data,sock_data->m_id,sz_error);
 			break;
 		}
 		return ;
@@ -264,7 +264,7 @@ static void read_tcp_data(cepoll_data *data,socket_data *sock_data)
 	{
 		char sz_error[64];
 		sprintf(sz_error,"read data zero [%s] errno=%d",strerror(errno),errno);
-		close_sock(data,sock_data->m_fd,sz_error);
+		close_sock(data,sock_data->m_id,sz_error);
 		return;
 	}
 	if(n == sock_data->m_recv_size)
@@ -279,10 +279,9 @@ static void read_tcp_data(cepoll_data *data,socket_data *sock_data)
 	{
 		sock_data->m_recv_size = MAX_BUFF_LEN;
 	}
-	filter_data(&sock_data->m_read_queue,temp_buff,n);
 	if(data->re_cb != NULL)
 	{
-		(*data->re_cb)(data,sock_data);
+		(*data->re_cb)(data,sock_data,temp_buff,n);
 	}
 }
 
@@ -338,7 +337,7 @@ socket_data* listen_sock(cepoll_data *data,const char *ip,int port,int opaque)
 	if(status != 0)
 	{
 		sprintf(sz_error,"bind [%s]",strerror(errno));
-		close_sock(data,listen_fd,sz_error);
+		close_sock(data,sock_data->m_id,sz_error);
 		return NULL;
 	}
 	//监听端口
@@ -346,14 +345,14 @@ socket_data* listen_sock(cepoll_data *data,const char *ip,int port,int opaque)
 	if(status != 0)
 	{
 		sprintf(sz_error,"listen [%s]",strerror(errno));
-		close_sock(data,listen_fd,sz_error);
+		close_sock(data,sock_data->m_id,sz_error);
 		return NULL;
 	}
 	//加入 epoll
 	if(epoll_add(data,sock_data->m_fd,sock_data) == -1)
 	{
 		sprintf(sz_error,"epoll add [%s]",strerror(errno));
-		close_sock(data,listen_fd,sz_error);
+		close_sock(data,sock_data->m_id,sz_error);
 		return NULL;	
 	}
 	sock_data->m_type = esock_listen;
@@ -452,7 +451,7 @@ socket_data* connect_sock(cepoll_data *data,const char *ip,int port)
 	{
 		char sz_error[64];
 		sprintf(sz_error,"epoll add connect_sock [%s]",strerror(errno));
-		close_sock(data,sock_data->m_fd,sz_error);
+		close_sock(data,sock_data->m_id,sz_error);
 		return NULL;
 	}
 
@@ -472,14 +471,21 @@ socket_data* connect_sock(cepoll_data *data,const char *ip,int port)
 }
 
 //发送数据
-void send_data(cepoll_data *data,socket_data* sock_data,char *buffer,int len)
+void send_data(cepoll_data *data,uint32_t id,char *buffer,int len)
 {
+	map<int,socket_data*>::iterator it = data->m_fds.find(id);
+	if(it == data->m_fds.end())
+	{
+		LOG_DBG("send data not find id=%d",id);
+		return ;
+	}	
+	socket_data* sock_data = it->second;
 	char *temp = new char[len]; 
 	memcpy(temp,buffer,len);
 	write_buffer *wr_bf = new write_buffer();
-	wr_bf->m_buffer = temp;
-	wr_bf->m_ptr = temp;
 	wr_bf->m_len = len;
+	wr_bf->m_ptr = temp;
+	wr_bf->m_buffer = temp;
 	spinlock_lock(&sock_data->m_write_list.m_lock);
 	if(sock_data->m_write_list.m_head == NULL)
 	{
@@ -493,7 +499,6 @@ void send_data(cepoll_data *data,socket_data* sock_data,char *buffer,int len)
 		sock_data->m_write_list.m_tail = wr_bf;
 	}
 	spinlock_unlock(&sock_data->m_write_list.m_lock);
-	LOG_DBG("send data size=%d",len);
 }
 
 //循环
@@ -516,6 +521,11 @@ void server_loop(cepoll_data *data,epoll_event *evs,int max_count)
 		//accept
 		case esock_listen:
 			{
+				//read 事件
+				bool ev_read  = cur_ev->events & EPOLLIN || cur_ev->events & EPOLLHUP;
+				bool ev_write = cur_ev->events & EPOLLOUT;
+				bool ev_error = cur_ev->events & EPOLLERR;
+				LOG_DBG("-------esock_listen read:%d write:%d error:%d\n",ev_read,ev_write,ev_error);
 				sockaddr_in addr_in;
 				socklen_t len = sizeof(sockaddr_in);
 				//接收一个 socket
@@ -528,7 +538,7 @@ void server_loop(cepoll_data *data,epoll_event *evs,int max_count)
 				set_reuse(client_fd);
 				//获取 ip 和端口
 				static char temp_ip[64]; 
-				inet_ntop(AF_INET,(void*)&addr_in.sin_addr,temp_ip,sizeof(temp_ip));				
+				inet_ntop(AF_INET,(void*)&addr_in.sin_addr,temp_ip,sizeof(temp_ip));
 				int port = ntohs(addr_in.sin_port);
 				LOG_DBG("accept fd=%d ip=%s port=%d",client_fd,temp_ip,port);
 				socket_data *new_sock_data = create_sock_data(data,client_fd,temp_ip,port);
@@ -536,7 +546,7 @@ void server_loop(cepoll_data *data,epoll_event *evs,int max_count)
 				if(epoll_add(data,client_fd,new_sock_data) == -1)
 				{
 					sprintf(sz_error,"accept add epoll %s %s",strerror(errno));
-					close_sock(data,client_fd,sz_error);
+					close_sock(data,new_sock_data->m_id,sz_error);
 				}
 				set_nonblocking(client_fd);
 				new_sock_data->m_type = esock_connected;
@@ -546,6 +556,11 @@ void server_loop(cepoll_data *data,epoll_event *evs,int max_count)
 			//三次握手成功
 		case esock_connecting:
 			{
+				//read 事件
+				bool ev_read  = cur_ev->events & EPOLLIN || cur_ev->events & EPOLLHUP;
+				bool ev_write = cur_ev->events & EPOLLOUT;
+				bool ev_error = cur_ev->events & EPOLLERR;
+				LOG_DBG("-------esock_connecting read:%d write:%d error:%d\n",ev_read,ev_write,ev_error);
 				int error;
 				socklen_t len = sizeof(error);  
 				int code = getsockopt(sock_data->m_fd, SOL_SOCKET, SO_ERROR, &error, &len);  
@@ -559,7 +574,7 @@ void server_loop(cepoll_data *data,epoll_event *evs,int max_count)
 					{
 						sprintf(sz_error,"connecting [%s]",strerror(error));
 					}
-					close_sock(data,sock_data->m_fd,sz_error);
+					close_sock(data,sock_data->m_id,sz_error);
 				}
 				else
 				{
@@ -571,14 +586,17 @@ void server_loop(cepoll_data *data,epoll_event *evs,int max_count)
 		case esock_connected:
 			{
 				//read 事件
-				bool ev_read  = cur_ev->events | EPOLLIN || cur_ev->events | EPOLLHUP;
-				bool ev_write = cur_ev->events | EPOLLOUT;
-				bool ev_error = cur_ev->events | EPOLLERR;
+				bool ev_read  = cur_ev->events & EPOLLIN || cur_ev->events & EPOLLHUP;
+				bool ev_write = cur_ev->events & EPOLLOUT;
+				bool ev_error = cur_ev->events & EPOLLERR;
+				LOG_DBG("-------esock_connected read:%d write:%d error:%d\n",ev_read,ev_write,ev_error);
 				if(ev_read)
 				{
 					read_tcp_data(data,sock_data);
 					if(!ev_write)
+					{
 						break;
+					}
 				}
 				//write 事件
 				if(ev_write)
@@ -603,12 +621,12 @@ void server_loop(cepoll_data *data,epoll_event *evs,int max_count)
 				{
 					sprintf(sz_error,"epoll err error [%s]",strerror(error));
 				}
-				close_sock(data,sock_data->m_fd,sz_error);
+				close_sock(data,sock_data->m_id,sz_error);
 				break;
 			}
 		default:
 			{
-				LOG_DBG("fd error");	
+				LOG_DBG("error fd:%d id:%d",sock_data->m_fd,sock_data->m_id);	
 				break;
 			}
 		}
